@@ -121,6 +121,9 @@ jobs:
           INPUT_PACKAGE_ID: ${{ inputs.package_id }}
           INPUT_THEME_COLOR: ${{ inputs.theme_color }}
 
+      - name: Install ImageMagick
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick
+
       - name: Fetch & normalize branding assets
         env:
           ICON_URL: ${{ inputs.icon_url }}
@@ -129,7 +132,6 @@ jobs:
         run: |
           set -e
           mkdir -p resources
-          # ImageMagick is preinstalled on ubuntu-latest as `convert`.
           COLOR="${THEME_COLOR:-#000000}"
           if [ -n "$ICON_URL" ]; then
             echo "Downloading icon from signed URL"
@@ -161,6 +163,7 @@ jobs:
             echo "No splash_url provided — @capacitor/assets will skip splash generation"
           fi
           ls -la resources/
+
 
 
 
