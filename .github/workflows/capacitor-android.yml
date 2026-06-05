@@ -121,28 +121,48 @@ jobs:
           INPUT_PACKAGE_ID: ${{ inputs.package_id }}
           INPUT_THEME_COLOR: ${{ inputs.theme_color }}
 
-      - name: Fetch branding assets
+      - name: Fetch & normalize branding assets
         env:
           ICON_URL: ${{ inputs.icon_url }}
           SPLASH_URL: ${{ inputs.splash_url }}
+          THEME_COLOR: ${{ inputs.theme_color }}
         run: |
+          set -e
           mkdir -p resources
+          # ImageMagick is preinstalled on ubuntu-latest as `convert`.
+          COLOR="${THEME_COLOR:-#000000}"
           if [ -n "$ICON_URL" ]; then
             echo "Downloading icon from signed URL"
-            curl -fsSL "$ICON_URL" -o resources/icon.png
-            file resources/icon.png
+            curl -fsSL "$ICON_URL" -o /tmp/icon-src.png
+            file /tmp/icon-src.png
+            # Pad to a 1024x1024 square on the theme color so @capacitor/assets
+            # accepts it as an adaptive-icon source regardless of source ratio.
+            convert /tmp/icon-src.png \
+              -resize 820x820\> \
+              -background "$COLOR" -gravity center -extent 1024x1024 \
+              -strip resources/icon.png
+            identify resources/icon.png
           else
             echo "No icon_url provided — @capacitor/assets will skip icon generation"
           fi
           if [ -n "$SPLASH_URL" ]; then
             echo "Downloading splash from signed URL"
-            curl -fsSL "$SPLASH_URL" -o resources/splash.png
-            file resources/splash.png
+            curl -fsSL "$SPLASH_URL" -o /tmp/splash-src.png
+            file /tmp/splash-src.png
+            # Pad to a 2732x2732 square on the theme color — required by
+            # @capacitor/assets so portrait + landscape splashes both render.
+            convert /tmp/splash-src.png \
+              -resize 2048x2048\> \
+              -background "$COLOR" -gravity center -extent 2732x2732 \
+              -strip resources/splash.png
             cp resources/splash.png resources/splash-dark.png
+            identify resources/splash.png
           else
             echo "No splash_url provided — @capacitor/assets will skip splash generation"
           fi
           ls -la resources/
+
+
 
       - name: Add Android platform
         run: npx --yes cap add android || npx --yes cap sync android
