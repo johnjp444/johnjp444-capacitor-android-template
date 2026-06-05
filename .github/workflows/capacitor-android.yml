@@ -234,23 +234,10 @@ jobs:
           from pathlib import Path
           p = Path('android/app/build.gradle')
           s = p.read_text()
-          props = """def keystorePropertiesFile = rootProject.file("key.properties")
-def keystoreProperties = new Properties()
-keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
-
-"""
+          props = 'def keystorePropertiesFile = rootProject.file("key.properties")\ndef keystoreProperties = new Properties()\nkeystoreProperties.load(new FileInputStream(keystorePropertiesFile))\n\n'
           if 'def keystorePropertiesFile' not in s:
               s = props + s
-          signing = """    signingConfigs {
-        release {
-            keyAlias keystoreProperties['keyAlias']
-            keyPassword keystoreProperties['keyPassword']
-            storeFile file(keystoreProperties['storeFile'])
-            storePassword keystoreProperties['storePassword']
-        }
-    }
-
-"""
+          signing = '    signingConfigs {\n        release {\n            keyAlias keystoreProperties["keyAlias"]\n            keyPassword keystoreProperties["keyPassword"]\n            storeFile file(keystoreProperties["storeFile"])\n            storePassword keystoreProperties["storePassword"]\n        }\n    }\n\n'
           if 'signingConfigs {' not in s:
               s = s.replace('    defaultConfig {', signing + '    defaultConfig {', 1)
           if 'signingConfig signingConfigs.release' not in s:
