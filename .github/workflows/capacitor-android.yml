@@ -33,6 +33,11 @@ on:
         required: false
         default: "#000000"
         type: string
+      app_version:
+        description: "Application version"
+        required: false
+        default: "1.0.0"
+        type: string
 
 permissions:
   contents: read
@@ -166,6 +171,4 @@ jobs:
           SIG=$(printf "%s" "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -hex | awk '{print $2}')
           curl -sS -X POST "${{ inputs.callback_url }}" \
             -H "Content-Type: application/json" \
-            -H "x-capacitor-signature: sha256=$SIG" \
             --data "$BODY" || true
-
