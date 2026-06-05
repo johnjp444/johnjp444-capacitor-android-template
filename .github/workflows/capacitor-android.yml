@@ -99,10 +99,10 @@ jobs:
       - name: Sync
         run: npx --yes cap sync android
 
-      - name: Build APK
+      - name: Build APK (debug-signed, installable)
         if: ${{ inputs.output == 'apk' }}
         working-directory: android
-        run: ./gradlew assembleRelease --no-daemon
+        run: ./gradlew assembleDebug --no-daemon
 
       - name: Build AAB
         if: ${{ inputs.output == 'aab' }}
@@ -115,10 +115,31 @@ jobs:
           if [ "${{ inputs.output }}" = "aab" ]; then
             FILE=$(find android/app/build/outputs/bundle/release -name "*.aab" | head -n1)
           else
-            FILE=$(find android/app/build/outputs/apk/release -name "*.apk" | head -n1)
+            FILE=$(find android/app/build/outputs/apk/debug -name "*.apk" | head -n1)
           fi
-          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+          if [ -z "$FILE" ]; then
+            echo "No artifact found" >&2
+            exit 1
+          fi
+          # Rename to a stable, install-friendly filename
+          DIR=$(dirname "$FILE")
+          EXT="${FILE##*.}"
+          NEW="$DIR/app-${{ inputs.build_id }}.$EXT"
+          mv "$FILE" "$NEW"
+          echo "file=$NEW" >> "$GITHUB_OUTPUT"
           echo "name=app-${{ inputs.build_id }}" >> "$GITHUB_OUTPUT"
+          echo "--- artifact info ---"
+          ls -la "$NEW"
+
+      - name: Verify APK signature
+        if: ${{ inputs.output == 'apk' }}
+        run: |
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n1)
+          "$BUILD_TOOLS/apksigner" verify --verbose "${{ steps.artifact.outputs.file }}" || {
+            echo "::error::APK signature verification failed"
+            exit 1
+          }
+          "$BUILD_TOOLS/aapt" dump badging "${{ steps.artifact.outputs.file }}" | head -5
 
       - name: Upload artifact
         id: upload
