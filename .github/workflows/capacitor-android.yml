@@ -170,6 +170,39 @@ jobs:
       - name: Add Android platform
         run: npx --yes cap add android || npx --yes cap sync android
 
+      - name: Compute versionCode + versionName
+        id: ver
+        run: |
+          # versionCode MUST be a strictly increasing integer for Google Play.
+          # Use unix epoch seconds — monotonic, unique per build, fits int32
+          # (max 2,100,000,000 ≈ year 2036, well under Play's 2,100,000,000 cap).
+          VC=$(date +%s)
+          VN="${{ inputs.app_version }}"
+          if [ -z "$VN" ]; then VN="1.0.0"; fi
+          echo "versionCode=$VC" >> "$GITHUB_OUTPUT"
+          echo "versionName=$VN" >> "$GITHUB_OUTPUT"
+          echo "Resolved versionCode=$VC versionName=$VN"
+
+      - name: Patch android/app/build.gradle (versionCode, versionName, applicationId)
+        env:
+          VERSION_CODE: ${{ steps.ver.outputs.versionCode }}
+          VERSION_NAME: ${{ steps.ver.outputs.versionName }}
+          PACKAGE_ID: ${{ inputs.package_id }}
+        run: |
+          set -e
+          GRADLE_FILE=android/app/build.gradle
+          if [ ! -f "$GRADLE_FILE" ]; then
+            echo "::error::$GRADLE_FILE not found after cap add android"
+            exit 1
+          fi
+          echo "--- Before patch ---"
+          grep -E "applicationId|versionCode|versionName" "$GRADLE_FILE" || true
+          perl -i -pe 's/applicationId\s+"[^"]*"/applicationId "'"$PACKAGE_ID"'"/g' "$GRADLE_FILE"
+          perl -i -pe 's/versionCode\s+\d+/versionCode '"$VERSION_CODE"'/g' "$GRADLE_FILE"
+          perl -i -pe 's/versionName\s+"[^"]*"/versionName "'"$VERSION_NAME"'"/g' "$GRADLE_FILE"
+          echo "--- After patch ---"
+          grep -E "applicationId|versionCode|versionName" "$GRADLE_FILE"
+
       - name: Generate Android icons and splash
         if: ${{ inputs.icon_url != '' || inputs.splash_url != '' }}
         run: |
@@ -254,7 +287,9 @@ jobs:
             --argjson run_id ${{ github.run_id }} \
             --argjson run_attempt ${{ github.run_attempt }} \
             --argjson duration_ms $DUR \
-            '{build_id:$build_id,status:$status,output:$output,artifact_url:$artifact_url,artifact_name:$artifact_name,artifact_id:$artifact_id,logs_url:$logs_url,run_id:$run_id,run_attempt:$run_attempt,duration_ms:$duration_ms}')
+            --arg version_code "${{ steps.ver.outputs.versionCode }}" \
+            --arg version_name "${{ steps.ver.outputs.versionName }}" \
+            '{build_id:$build_id,status:$status,output:$output,artifact_url:$artifact_url,artifact_name:$artifact_name,artifact_id:$artifact_id,logs_url:$logs_url,run_id:$run_id,run_attempt:$run_attempt,duration_ms:$duration_ms,version_code:$version_code,version_name:$version_name}')
           SIG=$(printf "%s" "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -hex | awk '{print $2}')
           curl -sS -X POST "${{ inputs.callback_url }}" \
             -H "Content-Type: application/json" \
@@ -280,3 +315,4 @@ jobs:
           curl -sS -X POST "${{ inputs.callback_url }}" \
             -H "Content-Type: application/json" \
             --data "$BODY" || true
+
