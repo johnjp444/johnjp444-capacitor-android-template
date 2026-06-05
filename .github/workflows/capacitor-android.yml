@@ -64,6 +64,10 @@ jobs:
     timeout-minutes: 30
     env:
       WEBHOOK_SECRET: ${{ secrets.CAPACITOR_WEBHOOK_SECRET }}
+      RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+      RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+      RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+      RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -203,6 +207,59 @@ jobs:
           echo "--- After patch ---"
           grep -E "applicationId|versionCode|versionName" "$GRADLE_FILE"
 
+      - name: Configure release signing for AAB
+        if: ${{ inputs.output == 'aab' }}
+        run: |
+          set -e
+          missing=0
+          for name in RELEASE_KEYSTORE_B64 RELEASE_KEYSTORE_PASSWORD RELEASE_KEY_ALIAS RELEASE_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is required for Play-compatible AAB release signing"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::AAB builds require a stable release upload key. Add RELEASE_KEYSTORE_B64, RELEASE_KEYSTORE_PASSWORD, RELEASE_KEY_ALIAS, and RELEASE_KEY_PASSWORD as repository secrets."
+            exit 1
+          fi
+          mkdir -p android/app/keystore
+          printf "%s" "$RELEASE_KEYSTORE_B64" | base64 -d > android/app/keystore/release.jks
+          cat > android/key.properties <<EOF
+          storeFile=keystore/release.jks
+          storePassword=$RELEASE_KEYSTORE_PASSWORD
+          keyAlias=$RELEASE_KEY_ALIAS
+          keyPassword=$RELEASE_KEY_PASSWORD
+          EOF
+          python3 - <<'PY2'
+          from pathlib import Path
+          p = Path('android/app/build.gradle')
+          s = p.read_text()
+          props = """def keystorePropertiesFile = rootProject.file("key.properties")
+def keystoreProperties = new Properties()
+keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+
+"""
+          if 'def keystorePropertiesFile' not in s:
+              s = props + s
+          signing = """    signingConfigs {
+        release {
+            keyAlias keystoreProperties['keyAlias']
+            keyPassword keystoreProperties['keyPassword']
+            storeFile file(keystoreProperties['storeFile'])
+            storePassword keystoreProperties['storePassword']
+        }
+    }
+
+"""
+          if 'signingConfigs {' not in s:
+              s = s.replace('    defaultConfig {', signing + '    defaultConfig {', 1)
+          if 'signingConfig signingConfigs.release' not in s:
+              s = s.replace('release {', 'release {\n            signingConfig signingConfigs.release', 1)
+          p.write_text(s)
+          PY2
+          echo "--- Release signing config wired ---"
+          grep -E "signingConfigs|signingConfig signingConfigs.release|storeFile|keyAlias" android/app/build.gradle android/key.properties
+
       - name: Generate Android icons and splash
         if: ${{ inputs.icon_url != '' || inputs.splash_url != '' }}
         run: |
@@ -229,6 +286,25 @@ jobs:
         if: ${{ inputs.output == 'aab' }}
         working-directory: android
         run: ./gradlew bundleRelease --no-daemon
+
+      - name: Verify AAB signature
+        if: ${{ inputs.output == 'aab' }}
+        run: |
+          set -e
+          FILE=$(find android/app/build/outputs/bundle/release -name "*.aab" | head -n1)
+          if [ -z "$FILE" ]; then
+            echo "::error::No AAB found for signature verification"
+            exit 1
+          fi
+          unzip -l "$FILE" | grep -E 'META-INF/.*\.(RSA|DSA|EC)$' || {
+            echo "::error::AAB is unsigned: no signing certificate block found in META-INF"
+            exit 1
+          }
+          jarsigner -verify -verbose -certs "$FILE" | tee /tmp/aab-jarsigner.txt
+          grep -q "jar verified" /tmp/aab-jarsigner.txt || {
+            echo "::error::AAB signature verification did not report 'jar verified'"
+            exit 1
+          }
 
       - name: Locate artifact
         id: artifact
