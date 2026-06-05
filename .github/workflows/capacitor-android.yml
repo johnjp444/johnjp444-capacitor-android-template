@@ -174,6 +174,42 @@ jobs:
       - name: Add Android platform
         run: npx --yes cap add android || npx --yes cap sync android
 
+      - name: Target Android 15 (API 35) — patch SDK, AGP, Gradle
+        run: |
+          set -e
+          VF=android/variables.gradle
+          if [ -f "$VF" ]; then
+            echo "--- variables.gradle BEFORE ---"
+            cat "$VF"
+            perl -i -pe 's/(minSdkVersion\s*=\s*)\d+/${1}23/g' "$VF"
+            perl -i -pe 's/(compileSdkVersion\s*=\s*)\d+/${1}35/g' "$VF"
+            perl -i -pe 's/(targetSdkVersion\s*=\s*)\d+/${1}35/g' "$VF"
+            echo "--- variables.gradle AFTER ---"
+            cat "$VF"
+          else
+            echo "::error::android/variables.gradle not found"
+            exit 1
+          fi
+
+          BG=android/build.gradle
+          if [ -f "$BG" ]; then
+            echo "--- root build.gradle BEFORE AGP patch ---"
+            grep -E "com.android.tools.build:gradle" "$BG" || true
+            perl -i -pe "s|com\.android\.tools\.build:gradle:[0-9]+\.[0-9]+\.[0-9]+|com.android.tools.build:gradle:8.5.2|g" "$BG"
+            echo "--- root build.gradle AFTER AGP patch ---"
+            grep -E "com.android.tools.build:gradle" "$BG" || true
+          fi
+
+          WP=android/gradle/wrapper/gradle-wrapper.properties
+          if [ -f "$WP" ]; then
+            echo "--- gradle-wrapper.properties BEFORE ---"
+            cat "$WP"
+            perl -i -pe 's|gradle-[0-9]+\.[0-9]+(\.[0-9]+)?-all\.zip|gradle-8.7-all.zip|g' "$WP"
+            perl -i -pe 's|gradle-[0-9]+\.[0-9]+(\.[0-9]+)?-bin\.zip|gradle-8.7-bin.zip|g' "$WP"
+            echo "--- gradle-wrapper.properties AFTER ---"
+            cat "$WP"
+          fi
+
       - name: Compute versionCode + versionName
         id: ver
         run: |
@@ -405,4 +441,5 @@ jobs:
             -H "Content-Type: application/json" \
             -H "x-capacitor-signature: sha256=$SIG" \
             --data "$BODY" || true
+
 
