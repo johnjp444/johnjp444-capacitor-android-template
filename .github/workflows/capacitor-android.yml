@@ -48,6 +48,11 @@ on:
         required: false
         default: ""
         type: string
+      artifact_name:
+        description: "Human-readable artifact base name (e.g. SentiraAI-v1.0.0)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -62,6 +67,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Resolve artifact name
+        id: name
+        run: |
+          NAME="${{ inputs.artifact_name }}"
+          if [ -z "$NAME" ]; then
+            NAME="app-${{ inputs.build_id }}"
+          fi
+          # sanitize: keep alnum, dot, dash, underscore
+          NAME=$(printf "%s" "$NAME" | tr -c 'A-Za-z0-9._-' '-' | sed 's/-\+/-/g; s/^-//; s/-$//')
+          if [ -z "$NAME" ]; then NAME="app-${{ inputs.build_id }}"; fi
+          echo "value=$NAME" >> "$GITHUB_OUTPUT"
+          echo "Resolved artifact name: $NAME"
 
       - name: Notify start
         if: ${{ env.WEBHOOK_SECRET != '' }}
@@ -170,10 +188,10 @@ jobs:
           fi
           DIR=$(dirname "$FILE")
           EXT="${FILE##*.}"
-          NEW="$DIR/app-${{ inputs.build_id }}.$EXT"
+          NEW="$DIR/${{ steps.name.outputs.value }}.$EXT"
           mv "$FILE" "$NEW"
           echo "file=$NEW" >> "$GITHUB_OUTPUT"
-          echo "name=app-${{ inputs.build_id }}" >> "$GITHUB_OUTPUT"
+          echo "name=${{ steps.name.outputs.value }}" >> "$GITHUB_OUTPUT"
           echo "--- artifact info ---"
           ls -la "$NEW"
 
@@ -191,7 +209,7 @@ jobs:
         id: upload
         uses: actions/upload-artifact@v4
         with:
-          name: app-${{ inputs.build_id }}
+          name: ${{ steps.name.outputs.value }}
           path: ${{ steps.artifact.outputs.file }}
           retention-days: 14
 
@@ -207,7 +225,7 @@ jobs:
             --arg status "succeeded" \
             --arg output "${{ inputs.output }}" \
             --arg artifact_url "$ART_URL" \
-            --arg artifact_name "app-${{ inputs.build_id }}" \
+            --arg artifact_name "${{ steps.name.outputs.value }}" \
             --argjson artifact_id ${{ steps.upload.outputs.artifact-id }} \
             --arg logs_url "$LOGS_URL" \
             --argjson run_id ${{ github.run_id }} \
