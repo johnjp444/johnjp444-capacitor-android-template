@@ -231,6 +231,7 @@ jobs:
           keyPassword=$RELEASE_KEY_PASSWORD
           EOF
           python3 - <<'PY2'
+          import re
           from pathlib import Path
           p = Path('android/app/build.gradle')
           s = p.read_text()
@@ -240,8 +241,16 @@ jobs:
           signing = '    signingConfigs {\n        release {\n            keyAlias keystoreProperties["keyAlias"]\n            keyPassword keystoreProperties["keyPassword"]\n            storeFile file(keystoreProperties["storeFile"])\n            storePassword keystoreProperties["storePassword"]\n        }\n    }\n\n'
           if 'signingConfigs {' not in s:
               s = s.replace('    defaultConfig {', signing + '    defaultConfig {', 1)
+          # Insert `signingConfig signingConfigs.release` into the buildTypes.release block only
           if 'signingConfig signingConfigs.release' not in s:
-              s = s.replace('release {', 'release {\n            signingConfig signingConfigs.release', 1)
+              m = re.search(r'buildTypes\s*\{', s)
+              if not m:
+                  raise SystemExit('buildTypes block not found in build.gradle')
+              rm = re.search(r'release\s*\{', s[m.end():])
+              if not rm:
+                  raise SystemExit('buildTypes.release block not found in build.gradle')
+              insert_at = m.end() + rm.end()
+              s = s[:insert_at] + '\n            signingConfig signingConfigs.release' + s[insert_at:]
           p.write_text(s)
           PY2
           echo "--- Release signing config wired ---"
@@ -394,5 +403,6 @@ jobs:
           SIG=$(printf "%s" "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -hex | awk '{print $2}')
           curl -sS -X POST "${{ inputs.callback_url }}" \
             -H "Content-Type: application/json" \
+            -H "x-capacitor-signature: sha256=$SIG" \
             --data "$BODY" || true
 
