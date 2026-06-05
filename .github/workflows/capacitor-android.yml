@@ -38,6 +38,16 @@ on:
         required: false
         default: "1.0.0"
         type: string
+      icon_url:
+        description: "Signed URL for 1024x1024 icon PNG (optional)"
+        required: false
+        default: ""
+        type: string
+      splash_url:
+        description: "Signed URL for 2732x2732 splash PNG (optional)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -93,8 +103,45 @@ jobs:
           INPUT_PACKAGE_ID: ${{ inputs.package_id }}
           INPUT_THEME_COLOR: ${{ inputs.theme_color }}
 
+      - name: Fetch branding assets
+        env:
+          ICON_URL: ${{ inputs.icon_url }}
+          SPLASH_URL: ${{ inputs.splash_url }}
+        run: |
+          mkdir -p resources
+          if [ -n "$ICON_URL" ]; then
+            echo "Downloading icon from signed URL"
+            curl -fsSL "$ICON_URL" -o resources/icon.png
+            file resources/icon.png
+          else
+            echo "No icon_url provided — @capacitor/assets will skip icon generation"
+          fi
+          if [ -n "$SPLASH_URL" ]; then
+            echo "Downloading splash from signed URL"
+            curl -fsSL "$SPLASH_URL" -o resources/splash.png
+            file resources/splash.png
+            cp resources/splash.png resources/splash-dark.png
+          else
+            echo "No splash_url provided — @capacitor/assets will skip splash generation"
+          fi
+          ls -la resources/
+
       - name: Add Android platform
         run: npx --yes cap add android || npx --yes cap sync android
+
+      - name: Generate Android icons and splash
+        if: ${{ inputs.icon_url != '' || inputs.splash_url != '' }}
+        run: |
+          npx --yes @capacitor/assets generate \
+            --android \
+            --iconBackgroundColor "${{ inputs.theme_color }}" \
+            --iconBackgroundColorDark "${{ inputs.theme_color }}" \
+            --splashBackgroundColor "${{ inputs.theme_color }}" \
+            --splashBackgroundColorDark "${{ inputs.theme_color }}"
+          echo "--- Generated mipmap resources ---"
+          ls -la android/app/src/main/res/mipmap-* 2>/dev/null || true
+          echo "--- Generated drawable resources ---"
+          ls -la android/app/src/main/res/drawable* 2>/dev/null || true
 
       - name: Sync
         run: npx --yes cap sync android
@@ -121,7 +168,6 @@ jobs:
             echo "No artifact found" >&2
             exit 1
           fi
-          # Rename to a stable, install-friendly filename
           DIR=$(dirname "$FILE")
           EXT="${FILE##*.}"
           NEW="$DIR/app-${{ inputs.build_id }}.$EXT"
