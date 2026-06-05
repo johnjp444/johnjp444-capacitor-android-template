@@ -1,0 +1,171 @@
+name: Capacitor Android Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_id:
+        description: "Build row id (uuid) from the app"
+        required: true
+        type: string
+      website_url:
+        description: "URL to wrap in the Capacitor shell"
+        required: true
+        type: string
+      app_name:
+        description: "Display name"
+        required: true
+        type: string
+      package_id:
+        description: "Android applicationId (com.example.app)"
+        required: true
+        type: string
+      output:
+        description: "apk | aab"
+        required: false
+        default: "apk"
+        type: string
+      callback_url:
+        description: "Webhook URL to POST status back to"
+        required: true
+        type: string
+      theme_color:
+        description: "Hex theme color"
+        required: false
+        default: "#000000"
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      WEBHOOK_SECRET: ${{ secrets.CAPACITOR_WEBHOOK_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Notify start
+        if: ${{ env.WEBHOOK_SECRET != '' }}
+        run: |
+          BODY=$(jq -nc \
+            --arg build_id "${{ inputs.build_id }}" \
+            --arg status "in_progress" \
+            --argjson run_id ${{ github.run_id }} \
+            --argjson run_attempt ${{ github.run_attempt }} \
+            --arg logs_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{build_id:$build_id,status:$status,run_id:$run_id,run_attempt:$run_attempt,logs_url:$logs_url}')
+          SIG=$(printf "%s" "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -hex | awk '{print $2}')
+          curl -sS -X POST "${{ inputs.callback_url }}" \
+            -H "Content-Type: application/json" \
+            -H "x-capacitor-signature: sha256=$SIG" \
+            --data "$BODY" || true
+
+      - name: Record start time
+        id: t0
+        run: echo "ts=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install deps
+        run: npm ci || npm install
+
+      - name: Patch config
+        run: node scripts/patch.mjs
+        env:
+          INPUT_WEBSITE_URL: ${{ inputs.website_url }}
+          INPUT_APP_NAME: ${{ inputs.app_name }}
+          INPUT_PACKAGE_ID: ${{ inputs.package_id }}
+          INPUT_THEME_COLOR: ${{ inputs.theme_color }}
+
+      - name: Add Android platform
+        run: npx --yes cap add android || npx --yes cap sync android
+
+      - name: Sync
+        run: npx --yes cap sync android
+
+      - name: Build APK
+        if: ${{ inputs.output == 'apk' }}
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Build AAB
+        if: ${{ inputs.output == 'aab' }}
+        working-directory: android
+        run: ./gradlew bundleRelease --no-daemon
+
+      - name: Locate artifact
+        id: artifact
+        run: |
+          if [ "${{ inputs.output }}" = "aab" ]; then
+            FILE=$(find android/app/build/outputs/bundle/release -name "*.aab" | head -n1)
+          else
+            FILE=$(find android/app/build/outputs/apk/release -name "*.apk" | head -n1)
+          fi
+          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+          echo "name=app-${{ inputs.build_id }}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-${{ inputs.build_id }}
+          path: ${{ steps.artifact.outputs.file }}
+          retention-days: 14
+
+      - name: Notify success
+        if: success() && env.WEBHOOK_SECRET != ''
+        run: |
+          T1=$(date +%s)
+          DUR=$(( (T1 - ${{ steps.t0.outputs.ts }}) * 1000 ))
+          ART_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${{ steps.upload.outputs.artifact-id }}"
+          LOGS_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BODY=$(jq -nc \
+            --arg build_id "${{ inputs.build_id }}" \
+            --arg status "succeeded" \
+            --arg output "${{ inputs.output }}" \
+            --arg artifact_url "$ART_URL" \
+            --arg artifact_name "app-${{ inputs.build_id }}" \
+            --argjson artifact_id ${{ steps.upload.outputs.artifact-id }} \
+            --arg logs_url "$LOGS_URL" \
+            --argjson run_id ${{ github.run_id }} \
+            --argjson run_attempt ${{ github.run_attempt }} \
+            --argjson duration_ms $DUR \
+            '{build_id:$build_id,status:$status,output:$output,artifact_url:$artifact_url,artifact_name:$artifact_name,artifact_id:$artifact_id,logs_url:$logs_url,run_id:$run_id,run_attempt:$run_attempt,duration_ms:$duration_ms}')
+          SIG=$(printf "%s" "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -hex | awk '{print $2}')
+          curl -sS -X POST "${{ inputs.callback_url }}" \
+            -H "Content-Type: application/json" \
+            -H "x-capacitor-signature: sha256=$SIG" \
+            --data "$BODY"
+
+      - name: Notify failure
+        if: failure() && env.WEBHOOK_SECRET != ''
+        run: |
+          T1=$(date +%s)
+          DUR=$(( (T1 - ${{ steps.t0.outputs.ts }}) * 1000 ))
+          LOGS_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BODY=$(jq -nc \
+            --arg build_id "${{ inputs.build_id }}" \
+            --arg status "failed" \
+            --arg logs_url "$LOGS_URL" \
+            --arg error_message "Workflow run failed. See logs." \
+            --argjson run_id ${{ github.run_id }} \
+            --argjson run_attempt ${{ github.run_attempt }} \
+            --argjson duration_ms $DUR \
+            '{build_id:$build_id,status:$status,logs_url:$logs_url,error_message:$error_message,run_id:$run_id,run_attempt:$run_attempt,duration_ms:$duration_ms}')
+          SIG=$(printf "%s" "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -hex | awk '{print $2}')
+          curl -sS -X POST "${{ inputs.callback_url }}" \
+            -H "Content-Type: application/json" \
+            -H "x-capacitor-signature: sha256=$SIG" \
+            --data "$BODY" || true
