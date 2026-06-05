@@ -287,24 +287,41 @@ keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
         working-directory: android
         run: ./gradlew bundleRelease --no-daemon
 
-      - name: Verify AAB signature
+      - name: Verify AAB (signature + bundletool validate)
         if: ${{ inputs.output == 'aab' }}
         run: |
           set -e
           FILE=$(find android/app/build/outputs/bundle/release -name "*.aab" | head -n1)
           if [ -z "$FILE" ]; then
-            echo "::error::No AAB found for signature verification"
+            echo "::error::No AAB produced by bundleRelease"
             exit 1
           fi
+          echo "--- AAB: $FILE ---"
+          ls -la "$FILE"
+
+          echo "--- META-INF signing block check ---"
           unzip -l "$FILE" | grep -E 'META-INF/.*\.(RSA|DSA|EC)$' || {
-            echo "::error::AAB is unsigned: no signing certificate block found in META-INF"
+            echo "::error::AAB is UNSIGNED: no signing certificate in META-INF. Failing the build per Play Store policy."
             exit 1
           }
+
+          echo "--- jarsigner -verify ---"
           jarsigner -verify -verbose -certs "$FILE" | tee /tmp/aab-jarsigner.txt
           grep -q "jar verified" /tmp/aab-jarsigner.txt || {
-            echo "::error::AAB signature verification did not report 'jar verified'"
+            echo "::error::jarsigner did not report 'jar verified'"
             exit 1
           }
+
+          echo "--- bundletool validate ---"
+          BT_VERSION=1.17.2
+          curl -fsSL -o /tmp/bundletool.jar             "https://github.com/google/bundletool/releases/download/${BT_VERSION}/bundletool-all-${BT_VERSION}.jar"
+          java -jar /tmp/bundletool.jar validate --bundle="$FILE" | tee /tmp/aab-bundletool.txt
+          # bundletool validate exits non-zero on structural problems; double-check output
+          grep -qiE "error|invalid" /tmp/aab-bundletool.txt && {
+            echo "::error::bundletool reported issues with the AAB"
+            exit 1
+          } || true
+          echo "AAB signature + structure: OK"
 
       - name: Locate artifact
         id: artifact
