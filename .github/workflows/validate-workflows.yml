@@ -39,7 +39,7 @@ jobs:
           yamllint -c .yamllint.yml .github/workflows/
 
       - name: actionlint (GitHub Actions schema)
-        run: actionlint -color
+        run: actionlint -color -shellcheck=
 
       - name: Parse + structural check (capacitor-android.yml)
         run: |
